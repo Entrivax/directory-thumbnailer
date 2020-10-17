@@ -19,7 +19,8 @@ node index.js "C:/Users/Me/Pictures"
 ## Options
 
 - `-c`, `--columns`, `--col` sets the maximum number of columns in the result, default is `5`
-- `-p`, `--padding` sets the size of padding between the thumbnails, default is `5`
+- `-p`, `--padding` sets the size in pixels of the padding between the thumbnails, default is `5`
+- `-s`, `--size` sets the size in pixels of the thumbnails, default is `128`
 - `-o`, `--out` sets the output file, default is the directory name + .png
 - `--background`, `--bg` sets the background color of the output, default is `white`
 - `--text-color`, `--color` sets the text color, default is `black`
