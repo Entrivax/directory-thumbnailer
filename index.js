@@ -25,16 +25,34 @@ require('yargs')
         type: 'string',
         description: 'output file, defaults to <dir>.png'
     })
+    .option('background', {
+        alias: ['bg'],
+        type: 'string',
+        default: 'white',
+        description: 'background color'
+    })
+    .option('text-color', {
+        alias: ['color'],
+        type: 'string',
+        default: 'black',
+        description: 'text color'
+    })
+    .option('shadow-color', {
+        alias: ['shadow'],
+        type: 'string',
+        default: 'rgba(0, 0, 0, 0.5)',
+        description: 'shadow color'
+    })
     .command('$0 <dir>', 'create thumbnails collage of a directory', () => {}, async (args) => {
         try {
-            await generateThumbnail(args.dir, args.out, args.columns, args.size, args.padding, 4, 12)
+            await generateThumbnail(args.dir, args.out, args.columns, args.size, args.padding, args["text-color"], args['shadow-color'], args.background, 4, 12)
         } catch (e) {
             console.error(e)
         }
     })
     .help().argv
 
-async function generateThumbnail(directory, outFile, columns, thumbnailSize, padding, textTopMargin, textSize) {
+async function generateThumbnail(directory, outFile, columns, thumbnailSize, padding, textColor, shadowColor, backgroundColor, textTopMargin, textSize) {
     const files = (await new Promise((resolve, reject) => {
         fs.readdir(directory, async (err, files) => {
             if (err) {
@@ -48,7 +66,6 @@ async function generateThumbnail(directory, outFile, columns, thumbnailSize, pad
         throw new Error('Directory is empty')
     }
     const unknownImage = await canvas.loadImage(path.join(__dirname, 'unknown.png'))
-    const textStroke = 2
     /** @type {canvas.Canvas} */
     let resultCanvas = null
     {
@@ -68,7 +85,7 @@ async function generateThumbnail(directory, outFile, columns, thumbnailSize, pad
         }
         resultCanvas = canvas.createCanvas(thumbnailsResultCanvas.width, thumbnailsResultCanvas.height)
         const resultCanvasCtx = resultCanvas.getContext('2d')
-        resultCanvasCtx.fillStyle = 'white'
+        resultCanvasCtx.fillStyle = backgroundColor
         resultCanvasCtx.fillRect(0, 0, resultCanvas.width, resultCanvas.height)
         resultCanvasCtx.drawImage(thumbnailsResultCanvas, 0, 0)
     }
@@ -94,13 +111,13 @@ async function generateThumbnail(directory, outFile, columns, thumbnailSize, pad
                     return maxSize
                 })()
                 const thumbnailMaxHeight = Math.max.apply(null, rowThumbnails.map(t => t.thumbnail.height))
-                const rowHeight = thumbnailMaxHeight + textTopMargin + maxTextHeight + textStroke * 2 + padding * 2
+                const rowHeight = thumbnailMaxHeight + textTopMargin + maxTextHeight + padding * 2
                 const rowCanvas = canvas.createCanvas(rowWidth, rowHeight)
                 const ctx = rowCanvas.getContext('2d')
                 for (let i = 0; i < rowThumbnails.length; i++) {
                     const fileThumbnail = rowThumbnails[i]
                     ctx.shadowBlur = 2
-                    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'
+                    ctx.shadowColor = shadowColor
                     ctx.shadowOffsetX = 2
                     ctx.shadowOffsetY = 2
                     ctx.drawImage(fileThumbnail.thumbnail,
@@ -112,16 +129,13 @@ async function generateThumbnail(directory, outFile, columns, thumbnailSize, pad
                     ctx.shadowOffsetX = 0
                     ctx.shadowOffsetY = 0
                     ctx.font = `bold ${textSize}px sans-serif`
-                    ctx.lineWidth = textStroke
                     const textMeasures = ctx.measureText(fileThumbnail.file)
                     const textPosition = {
-                        x: i * (padding * 2 + thumbnailSize) + padding + textStroke + Math.max((thumbnailSize - textStroke * 2) / 2 - textMeasures.width / 2, 0),
-                        y: thumbnailMaxHeight + textTopMargin + textSize + textStroke
+                        x: i * (padding * 2 + thumbnailSize) + padding + Math.max(thumbnailSize / 2 - textMeasures.width / 2, 0),
+                        y: thumbnailMaxHeight + padding + textTopMargin + textSize
                     }
-                    ctx.strokeStyle = 'black'
-                    ctx.strokeText(fileThumbnail.file, textPosition.x, textPosition.y, thumbnailSize - textStroke * 2)
-                    ctx.fillStyle = 'white'
-                    ctx.fillText(fileThumbnail.file, textPosition.x, textPosition.y, thumbnailSize - textStroke * 2)
+                    ctx.fillStyle = textColor
+                    ctx.fillText(fileThumbnail.file, textPosition.x, textPosition.y, thumbnailSize)
                 }
 
                 rowThumbnails = []
