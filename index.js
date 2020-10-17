@@ -20,17 +20,22 @@ require('yargs')
         default: 5,
         description: 'size of padding between thumbnails'
     })
+    .option('out', {
+        alias: ['o'],
+        type: 'string',
+        description: 'output file, defaults to <dir>.png'
+    })
     .command('$0 <dir>', 'create thumbnails collage of a directory', () => {}, async (args) => {
         try {
-            await generateThumbnail(args.dir, args.columns, args.size, args.padding)
+            await generateThumbnail(args.dir, args.out, args.columns, args.size, args.padding, 4, 12)
         } catch (e) {
             console.error(e)
         }
     })
     .help().argv
 
-async function generateThumbnail(directory, columns, thumbnailSize, padding) {
-    const files = await new Promise((resolve, reject) => {
+async function generateThumbnail(directory, outFile, columns, thumbnailSize, padding, textTopMargin, textSize) {
+    const files = (await new Promise((resolve, reject) => {
         fs.readdir(directory, async (err, files) => {
             if (err) {
                 reject(err)
@@ -38,61 +43,125 @@ async function generateThumbnail(directory, columns, thumbnailSize, padding) {
             }
             resolve(files)
         })
-    })
+    })).filter(f => /\.(png|jpg|jpeg|gif|svg|bmp)$/gi.test(f))
     if (files.length === 0) {
         throw new Error('Directory is empty')
     }
     const unknownImage = await canvas.loadImage(path.join(__dirname, 'unknown.png'))
-    const collageSize = {
-        width: (thumbnailSize + padding * 2) * Math.min(columns, files.length),
-        height: (thumbnailSize + padding * 2) * Math.ceil(files.length / columns)
+    const textStroke = 2
+    /** @type {canvas.Canvas} */
+    let resultCanvas = null
+    {
+        let rowGenerator = createThumbnailRows(files)
+        var thumbnailsResultCanvas = null
+        for await (let row of rowGenerator) {
+            const rowCanvas = row
+            if (thumbnailsResultCanvas == null) {
+                thumbnailsResultCanvas = rowCanvas
+            } else {
+                const previousCanvas = thumbnailsResultCanvas
+                thumbnailsResultCanvas = canvas.createCanvas(Math.max(previousCanvas.width, rowCanvas.width), previousCanvas.height + rowCanvas.height)
+                const ctx = thumbnailsResultCanvas.getContext('2d')
+                ctx.drawImage(previousCanvas, 0, 0)
+                ctx.drawImage(rowCanvas, 0, previousCanvas.height)
+            }
+        }
+        resultCanvas = canvas.createCanvas(thumbnailsResultCanvas.width, thumbnailsResultCanvas.height)
+        const resultCanvasCtx = resultCanvas.getContext('2d')
+        resultCanvasCtx.fillStyle = 'white'
+        resultCanvasCtx.fillRect(0, 0, resultCanvas.width, resultCanvas.height)
+        resultCanvasCtx.drawImage(thumbnailsResultCanvas, 0, 0)
     }
-    const collageCanvas = canvas.createCanvas(collageSize.width, collageSize.height)
-    const ctx = collageCanvas.getContext('2d')
-    ctx.fillStyle = 'white'
-    ctx.fillRect(0, 0, collageSize.width, collageSize.height)
-    for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        console.log(file)
+    async function* createThumbnailRows(filesPool) {
+        const filesLeft = Array.from(filesPool)
+        let rowThumbnails = []
+        while (filesLeft.length > 0) {
+            const file = filesLeft.splice(0, 1)[0]
+            try {
+                rowThumbnails.push({ thumbnail: await createThumbnail(file, unknownImage), file })
+            } catch (e) { }
+            if (rowThumbnails.length >= columns || filesLeft.length === 0) {
+                const rowWidth = rowThumbnails.length * (padding * 2 + thumbnailSize)
+                const maxTextHeight = (function() {
+                    const textCanvas = canvas.createCanvas(1, 1)
+                    const ctx = textCanvas.getContext('2d')
+                    ctx.font = `bold ${textSize}px sans-serif`
+                    let maxSize = 0
+                    for (let i = 0; i < rowThumbnails.length; i++) {
+                        const textMeasures = ctx.measureText(rowThumbnails[i].file)
+                        maxSize = Math.max(textMeasures.emHeightAscent + textMeasures.emHeightDescent, maxSize)
+                    }
+                    return maxSize
+                })()
+                const thumbnailMaxHeight = Math.max.apply(null, rowThumbnails.map(t => t.thumbnail.height))
+                const rowHeight = thumbnailMaxHeight + textTopMargin + maxTextHeight + textStroke * 2 + padding * 2
+                const rowCanvas = canvas.createCanvas(rowWidth, rowHeight)
+                const ctx = rowCanvas.getContext('2d')
+                for (let i = 0; i < rowThumbnails.length; i++) {
+                    const fileThumbnail = rowThumbnails[i]
+                    ctx.shadowBlur = 2
+                    ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'
+                    ctx.shadowOffsetX = 2
+                    ctx.shadowOffsetY = 2
+                    ctx.drawImage(fileThumbnail.thumbnail,
+                        Math.floor(i * (padding * 2 + thumbnailSize) + padding + thumbnailSize / 2 - fileThumbnail.thumbnail.width / 2),
+                        Math.floor(padding + thumbnailMaxHeight / 2 - fileThumbnail.thumbnail.height / 2)
+                    )
+                    ctx.shadowBlur = 0
+                    ctx.shadowColor = 'rgba(0, 0, 0, 0)'
+                    ctx.shadowOffsetX = 0
+                    ctx.shadowOffsetY = 0
+                    ctx.font = `bold ${textSize}px sans-serif`
+                    ctx.lineWidth = textStroke
+                    const textMeasures = ctx.measureText(fileThumbnail.file)
+                    const textPosition = {
+                        x: i * (padding * 2 + thumbnailSize) + padding + textStroke + Math.max((thumbnailSize - textStroke * 2) / 2 - textMeasures.width / 2, 0),
+                        y: thumbnailMaxHeight + textTopMargin + textSize + textStroke
+                    }
+                    ctx.strokeStyle = 'black'
+                    ctx.strokeText(fileThumbnail.file, textPosition.x, textPosition.y, thumbnailSize - textStroke * 2)
+                    ctx.fillStyle = 'white'
+                    ctx.fillText(fileThumbnail.file, textPosition.x, textPosition.y, thumbnailSize - textStroke * 2)
+                }
+
+                rowThumbnails = []
+                yield rowCanvas
+            }
+        }
+    }
+    async function createThumbnail(file, fallbackImage) {
         let image = null
         try {
+            console.log(`thumbnailing ${file}`)
             image = await canvas.loadImage(path.join(directory, file))
         } catch (e) {
-            image = unknownImage
+            if (fallbackImage != null) {
+                image = fallbackImage
+            } else {
+                throw e
+            }
         }
         const scaleRatio = Math.min(thumbnailSize / image.naturalWidth, thumbnailSize / image.naturalHeight)
-        const scaledWidth = image.naturalWidth * scaleRatio
-        const scaledHeight = image.naturalHeight * scaleRatio
-        const column = i % columns
-        const row = Math.trunc(i / columns)
-        ctx.shadowBlur = 2
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.5)'
-        ctx.shadowOffsetX = 2
-        ctx.shadowOffsetY = 2
+        const scaledWidth = Math.floor(image.naturalWidth * scaleRatio)
+        const scaledHeight = Math.floor(image.naturalHeight * scaleRatio)
+        const drawCanvas = canvas.createCanvas(scaledWidth, scaledHeight)
+        const ctx = drawCanvas.getContext('2d')
         ctx.drawImage(image,
-            column * (padding * 2 + thumbnailSize) + padding + (thumbnailSize * .5 - scaledWidth * .5),
-            row * (padding * 2 + thumbnailSize) + padding + (thumbnailSize * .5 - scaledHeight * .5),
+            0,
+            0,
             scaledWidth,
             scaledHeight
         )
-        ctx.shadowBlur = 0
-        ctx.shadowColor = 'rgba(0, 0, 0, 0)'
-        ctx.shadowOffsetX = 0
-        ctx.shadowOffsetY = 0
-        ctx.font = 'bold 12px sans-serif'
-        ctx.lineWidth = 2
-        const textPosition = {
-            x: column * (padding * 2 + thumbnailSize) + padding,
-            y: row * (padding * 2 + thumbnailSize) + padding + 12
-        }
-        ctx.strokeStyle = 'black'
-        ctx.strokeText(file, textPosition.x, textPosition.y, thumbnailSize)
-        ctx.fillStyle = 'white'
-        ctx.fillText(file, textPosition.x, textPosition.y, thumbnailSize)
+        return drawCanvas
     }
     await new Promise((resolve, reject) => {
-        const out = fs.createWriteStream(`${path.basename(directory)}.png`)
-        const stream = collageCanvas.createPNGStream()
+        const finalOutFile = outFile == null ? `${path.basename(directory)}.png` : outFile
+        const out = fs.createWriteStream(finalOutFile)
+        const stream = /\.png$/gi.test(finalOutFile)
+            ? resultCanvas.createPNGStream()
+            : /\.(jpg|jpeg)$/gi.test(finalOutFile)
+            ? resultCanvas.createJPEGStream({ quality: 1 })
+            : resultCanvas.createPNGStream()
         stream.pipe(out)
         out.on('error', (err) => reject(err))
         out.on('finish', () => resolve())
